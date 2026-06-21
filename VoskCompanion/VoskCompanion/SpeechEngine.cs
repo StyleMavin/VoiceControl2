@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
+using NAudio.CoreAudioApi;
 using NAudio.Wave;
+using NAudio.Wave.SampleProviders;
 using Vosk;
 
 namespace VoskCompanion {
@@ -14,22 +16,25 @@ namespace VoskCompanion {
 
         private Model          _model;
         private VoskRecognizer _recognizer;
-        private WaveInEvent    _waveIn;
         private List<string>   _phrases = new List<string>();
         private string         _currentGrammar;       // grammar the live recognizer was built with
         private readonly object _recognizerLock = new object();
         private bool  _running;
         private float _minConfidence;
 
+        // Audio capture uses WASAPI (modern Windows audio API). The legacy WaveInEvent
+        // (WinMM waveInOpen) requesting an exact 16 kHz format was wedging some audio
+        // drivers — breaking both mic AND playback system-wide. WASAPI captures at the
+        // device's native format; we resample to the 16 kHz mono PCM that Vosk needs.
+        private WasapiCapture        _capture;
+        private BufferedWaveProvider _captureBuffer;
+        private IWaveProvider        _provider16k;     // 16 kHz mono 16-bit, fed to Vosk
+        private byte[]               _readBuf;
+
         public void Init(string modelPath, float minConfidence) {
             _minConfidence = minConfidence;
             Vosk.Vosk.SetLogLevel(-1); // suppress Vosk console noise
             _model = new Model(modelPath);
-
-            _waveIn = new WaveInEvent();
-            _waveIn.WaveFormat = new WaveFormat(16000, 16, 1);
-            _waveIn.BufferMilliseconds = 100;
-            _waveIn.DataAvailable += OnDataAvailable;
         }
 
         // Rebuilds the recognizer with a grammar limited to the current phrases.
@@ -101,28 +106,79 @@ namespace VoskCompanion {
         }
 
         public void Start() {
-            if (_waveIn == null) return;
-            _running = true;
-            _waveIn.StartRecording();
+            try {
+                // Default capture device, shared mode (won't block other apps' audio)
+                _capture = new WasapiCapture();
+                WaveFormat src = _capture.WaveFormat;
+                OnLog?.Invoke($"Microphone format: {src.SampleRate} Hz, {src.Channels} ch, {src.BitsPerSample}-bit ({src.Encoding})");
+
+                _captureBuffer = new BufferedWaveProvider(src) {
+                    DiscardOnBufferOverflow = true,
+                    BufferDuration = TimeSpan.FromSeconds(2),
+                    // CRITICAL: default is true, which makes Read() return silence-padded
+                    // full buffers forever — turning our drain loop into an infinite loop
+                    // (and freezing the UI, since WASAPI raises the callback on this thread).
+                    // false => Read() returns only what's available, and 0 when empty.
+                    ReadFully = false
+                };
+
+                // Build a conversion chain -> mono -> 16 kHz -> 16-bit PCM (what Vosk wants)
+                ISampleProvider samples = _captureBuffer.ToSampleProvider();
+                if (src.Channels == 2)
+                    samples = new StereoToMonoSampleProvider(samples) { LeftVolume = 0.5f, RightVolume = 0.5f };
+                else if (src.Channels > 2)
+                    samples = new MultiplexingSampleProvider(new[] { samples }, 1); // take channel 0
+                var resampled = new WdlResamplingSampleProvider(samples, 16000);
+                _provider16k = new SampleToWaveProvider16(resampled);
+                _readBuf = new byte[3200]; // ~0.1 s of 16 kHz mono 16-bit audio
+
+                _capture.DataAvailable += OnCaptureData;
+                _running = true;
+                _capture.StartRecording();
+            }
+            catch (Exception ex) {
+                _running = false;
+                try { _capture?.Dispose(); } catch { }
+                _capture = null;
+                throw new InvalidOperationException(
+                    "Could not open the microphone. It may be in use, disabled, or unavailable. " +
+                    "Check Windows Sound settings (set a default input device), close other apps using the mic, then click Restart. " +
+                    "(If audio is glitchy, run the Windows 'Troubleshoot sound problems' tool.) [" + ex.Message + "]", ex);
+            }
         }
 
         public void Stop() {
             _running = false;
-            _waveIn?.StopRecording();
+            try { _capture?.StopRecording(); } catch { }
+            try { _capture?.Dispose(); } catch { }
+            _capture       = null;
+            _captureBuffer = null;
+            _provider16k   = null;
         }
 
-        private void OnDataAvailable(object sender, WaveInEventArgs e) {
-            if (!_running) return;
+        private void OnCaptureData(object sender, WaveInEventArgs e) {
+            if (!_running || _provider16k == null) return;
+
+            // Feed raw captured audio into the conversion chain
+            _captureBuffer.AddSamples(e.Buffer, 0, e.BytesRecorded);
+
             lock (_recognizerLock) {
-                if (_recognizer == null) return;
-                if (_recognizer.AcceptWaveform(e.Buffer, e.BytesRecorded)) {
-                    string text = ExtractText(_recognizer.Result());
-                    if (!string.IsNullOrWhiteSpace(text)) {
-                        OnLog?.Invoke("Vosk heard: \"" + text + "\"");
-                        CheckForMatch(text);
+                // Pull all available converted (16 kHz mono 16-bit) audio and feed Vosk.
+                // The guard cap is belt-and-suspenders: even if a provider ever misbehaves
+                // and won't return 0, we can never spin forever and freeze again.
+                int read;
+                int guard = 0;
+                while ((read = _provider16k.Read(_readBuf, 0, _readBuf.Length)) > 0 && guard++ < 1000) {
+                    if (_recognizer == null) continue; // no phrases yet — just drain
+                    if (_recognizer.AcceptWaveform(_readBuf, read)) {
+                        string text = ExtractText(_recognizer.Result());
+                        if (!string.IsNullOrWhiteSpace(text)) {
+                            OnLog?.Invoke("Vosk heard: \"" + text + "\"");
+                            CheckForMatch(text);
+                        }
                     }
+                    // else: partial result — wait for the final result on silence
                 }
-                // else: partial result — wait for the final result on silence
             }
         }
 
@@ -169,8 +225,7 @@ namespace VoskCompanion {
         }
 
         public void Dispose() {
-            Stop();
-            _waveIn?.Dispose();
+            Stop(); // stops + disposes the WASAPI capture, releasing the mic
             lock (_recognizerLock) {
                 _recognizer?.Dispose();
                 _recognizer = null;

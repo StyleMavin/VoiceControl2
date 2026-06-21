@@ -10,6 +10,8 @@ namespace VoskCompanion {
 
     public class MainForm : Form {
 
+        private Button   _listenButton;
+        private bool     _listening;
         private Label    _statusLabel;
         private Label    _modelLabel;
         private Label    _portLabel;
@@ -36,11 +38,11 @@ namespace VoskCompanion {
 
         private void BuildUI() {
             Text = "VoskCompanion";
-            Width = 560;
-            Height = 480;
+            Width = 760;
+            Height = 500;
             StartPosition = FormStartPosition.CenterScreen;
             Icon = SystemIcons.Application;
-            MinimumSize = new Size(420, 320);
+            MinimumSize = new Size(700, 380);
 
             // Status banner
             _statusLabel = new Label {
@@ -96,13 +98,21 @@ namespace VoskCompanion {
             var exitBtn     = MakeButton("Exit",            (s, e) => DoExit());
             var trayBtn     = MakeButton("Minimize to Tray",(s, e) => HideToTray());
             var settingsBtn = MakeButton("Settings...",     (s, e) => ShowSettings());
-            var restartBtn  = MakeButton("Restart",         (s, e) => { StopServices(); StartServices(); });
             var clearBtn    = MakeButton("Clear Log",       (s, e) => { _logLines.Clear(); _logBox.Clear(); });
-            buttons.Controls.Add(exitBtn);
-            buttons.Controls.Add(trayBtn);
-            buttons.Controls.Add(settingsBtn);
+            var restartBtn  = MakeButton("Restart",         (s, e) => { StopServices(); StartServices(); });
+            _listenButton   = MakeButton("Start Listening", (s, e) => ToggleListening());
+            _listenButton.Font = new Font("Segoe UI", 9, FontStyle.Bold);
+            _listenButton.BackColor = Color.FromArgb(60, 140, 70);
+            _listenButton.ForeColor = Color.White;
+            // _listenButton is added FIRST so that in this RightToLeft flow it sits at the
+            // right edge — always visible even if the window is narrow. (Previously it was
+            // added last, landing on the left and getting clipped at the default width.)
+            buttons.Controls.Add(_listenButton);
             buttons.Controls.Add(restartBtn);
+            buttons.Controls.Add(settingsBtn);
             buttons.Controls.Add(clearBtn);
+            buttons.Controls.Add(trayBtn);
+            buttons.Controls.Add(exitBtn);
 
             // Order matters: Fill must be added before docked siblings to layout correctly
             Controls.Add(_logBox);
@@ -183,6 +193,15 @@ namespace VoskCompanion {
             Application.Exit();
         }
 
+        // Safety net: guarantees the microphone is released on every actual close
+        // path — Exit button, Windows shutdown, log-off, or task-kill-with-close —
+        // so an instance can never leave the mic device held for other apps.
+        protected override void OnFormClosed(FormClosedEventArgs e) {
+            try { StopServices(); } catch { }
+            if (_tray != null) _tray.Visible = false;
+            base.OnFormClosed(e);
+        }
+
         // ── Services ──────────────────────────────────────────────────────
 
         private void StartServices() {
@@ -206,30 +225,79 @@ namespace VoskCompanion {
             }
 
             try {
-                SetStatus("Loading model...", Color.FromArgb(70, 70, 30));
                 AddLog("Loading model from: " + _settings.ModelPath);
 
+                // Load the model and prepare the engine, but DO NOT open the microphone.
+                // The mic is opened only when the user clicks "Start Listening" — so simply
+                // launching the app can never touch the audio device.
                 _speech = new SpeechEngine();
                 _speech.Init(_settings.ModelPath, _settings.MinConfidence);
                 _speech.OnPhraseMatched += OnPhraseMatched;
                 _speech.OnStatusChanged += s => SetStatus(s, Color.FromArgb(30, 70, 40));
                 _speech.OnLog           += AddLog;
-                _speech.Start();
 
+                // The UDP link to VAM is harmless (no audio) — start it now.
                 _server = new SocketServer();
-                _server.OnPhrasesReceived += phrases => _speech.SetPhrases(phrases);
-                _server.OnStatusChanged   += s => SetStatus(s, Color.FromArgb(30, 60, 80));
+                _server.OnPhrasesReceived += phrases => _speech?.SetPhrases(phrases);
+                _server.OnStatusChanged   += s => { if (!_listening) SetStatus(s + "  —  click Start Listening", Color.FromArgb(60, 60, 80)); };
                 _server.OnLog             += AddLog;
                 _server.Start(_settings.Port);
 
-                SetStatus($"Waiting for VAM  (UDP port {_settings.Port})", Color.FromArgb(30, 60, 80));
-                AddLog("Model loaded. Ready.");
+                _listening = false;
+                UpdateListenButton();
+                SetStatus("Ready — click Start Listening to enable the microphone", Color.FromArgb(60, 60, 80));
+                AddLog("Model loaded. Microphone is OFF until you click Start Listening.");
             }
             catch (Exception ex) {
-                SetStatus("Error — see log", Color.FromArgb(120, 40, 40));
-                AddLog("Startup error: " + ex.Message);
+                StopServices();
+                SetStatus("Startup problem — see log, then click Restart", Color.FromArgb(120, 40, 40));
+                AddLog(ex.Message);
             }
             RefreshInfo();
+        }
+
+        // ── Listening toggle (the only thing that opens the microphone) ─────
+
+        private void ToggleListening() {
+            if (_speech == null) { AddLog("Engine not ready. Click Restart."); return; }
+            if (_listening) StopListening();
+            else            StartListening();
+        }
+
+        private void StartListening() {
+            try {
+                _speech.Start(); // opens the WASAPI microphone
+                _listening = true;
+                UpdateListenButton();
+                SetStatus($"Listening  (UDP port {_settings.Port})", Color.FromArgb(30, 70, 40));
+                AddLog("Microphone ON. Listening.");
+            }
+            catch (Exception ex) {
+                _listening = false;
+                UpdateListenButton();
+                try { _speech.Stop(); } catch { }
+                SetStatus("Microphone unavailable — see log", Color.FromArgb(120, 40, 40));
+                AddLog(ex.Message);
+            }
+        }
+
+        private void StopListening() {
+            try { _speech.Stop(); } catch { } // stops + releases the mic
+            _listening = false;
+            UpdateListenButton();
+            SetStatus("Microphone OFF (Stopped). Click Start Listening to resume.", Color.FromArgb(60, 60, 80));
+            AddLog("Microphone OFF.");
+        }
+
+        private void UpdateListenButton() {
+            if (_listenButton == null) return;
+            if (_listening) {
+                _listenButton.Text = "Stop Listening";
+                _listenButton.BackColor = Color.FromArgb(150, 60, 60);
+            } else {
+                _listenButton.Text = "Start Listening";
+                _listenButton.BackColor = Color.FromArgb(60, 140, 70);
+            }
         }
 
         // Looks for a Vosk model folder next to the executable. A valid model folder
@@ -252,6 +320,8 @@ namespace VoskCompanion {
             _speech = null;
             _server?.Dispose();
             _server = null;
+            _listening = false;
+            UpdateListenButton();
         }
 
         private void OnPhraseMatched(string phrase) {
