@@ -6,8 +6,10 @@
 //   - Windows Speech (Legacy): original KeywordRecognizer / WSR / SAPI
 //   - Vosk Companion: talks to VoskCompanion.exe over localhost UDP (future-proof)
 //
-// Credits: Almadiel (original VoiceTrigger), MacGruber/Acidbubbles (TriggerHandler),
-//          Acidbubbles (text input field), MeshedVR (HUD example)
+// Credits: VeeRifter (VoiceControl, the plugin this is based on),
+//          Almadiel (original VoiceTrigger, which VoiceControl was based on),
+//          MacGruber/Acidbubbles (TriggerHandler), Acidbubbles (text input field),
+//          MeshedVR (HUD example)
 
 using System;
 using System.Collections.Generic;
@@ -23,7 +25,7 @@ namespace StyleMavin {
         private const string pluginName    = "VoiceControl2";
         private const string pluginAuthor  = "StyleMavin";
         private const string pluginVersion = "v2.0";
-        private const string pluginDate    = "2025";
+        private const string pluginDate    = "2026";
         private const string aboutText     = "\n<b><size=40><color=brown>" + pluginName + " " + pluginVersion
                                              + "</color></size></b>\n<i>" + pluginAuthor + "\n" + pluginDate + "</i>";
         private const string chooserDefault = "Select";
