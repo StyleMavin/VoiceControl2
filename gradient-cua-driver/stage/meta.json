@@ -1,0 +1,31 @@
+{
+   "licenseType" : "PC",
+   "creatorName" : "StyleMavin",
+   "packageName" : "GradientCUADriver",
+   "standardReferenceVersionOption" : "Latest",
+   "scriptReferenceVersionOption" : "Exact",
+   "description" : "Drives CUA lights and emissive materials from bundled 1D gradient strips. v2: gradients auto-load on init, targets auto-refresh, clean 4-tab UI (Main / Gradients / Targeting / Advanced), per-channel enable toggles, global speed control.",
+   "credits" : "",
+   "instructions" : "Place the var in your AddonPackages folder. Add the plugin to your CUA atom - the bundled gradients load automatically and channels start driving as soon as the asset finishes loading. Use the Gradients tab to swap in your own PNG strips (wide, 1px tall).",
+   "promotionalLink" : "",
+   "programVersion" : "1.22.0.3",
+   "contentList" : [
+      "Custom/Scripts/StyleMavin/GradientCUADriver.cs",
+      "Custom/Assets/StyleMavin/Gradients/gradient_Crazy_Neon_01_6000x1_CH-A.png",
+      "Custom/Assets/StyleMavin/Gradients/gradient_Blue_Green_01_6000x1_CH-B.png",
+      "Custom/Assets/StyleMavin/Gradients/gradient_Reds_01_6000x1_CH-C.png",
+      "Custom/Assets/StyleMavin/Gradients/gradient_neon_candy01_6000x1_CH-D.png",
+      "Custom/Assets/StyleMavin/Gradients/gradient_neon_candy02_6000x1_CH-E.png",
+      "Custom/Assets/StyleMavin/Gradients/gradient_Blue_01_6000x1_CH-F.png",
+      "Custom/Assets/StyleMavin/Gradients/gradient_neon_6000x1_CH-G.png",
+      "Custom/Assets/StyleMavin/Gradients/gradient_Pinks_01_6000x1.png"
+   ],
+   "dependencies" : {
+   },
+   "customOptions" : {
+      "preloadMorphs" : "false"
+   },
+   "hadReferenceIssues" : "false",
+   "referenceIssues" : [
+   ]
+}
